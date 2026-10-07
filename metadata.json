@@ -1,0 +1,6 @@
+{
+  "name": "FableVoice - AI Storyteller & Human Speech Studio",
+  "description": "Transform unlimited story text into cinematic, lifelike human speech with male and female voices, dynamic voice modes, pitch controls, offline playback, and high-quality MP3/WAV export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
