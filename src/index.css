@@ -6,11 +6,15 @@
   }
 
   h1, h2, h3, h4, h5, h6, .font-heading, .font-poppins {
-    font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif !important;
     letter-spacing: -0.015em;
   }
 }
 
 .font-heading {
-  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+.font-poppins {
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }

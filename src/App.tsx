@@ -197,6 +197,8 @@ export default function App() {
   const [duration, setDuration] = useState<number>(0);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioBase64, setAudioBase64] = useState<string | null>(null);
+  const [downloadUrlWav, setDownloadUrlWav] = useState<string | null>(null);
+  const [downloadUrlMp3, setDownloadUrlMp3] = useState<string | null>(null);
 
   // Synthesis State
   const [isSynthesizing, setIsSynthesizing] = useState<boolean>(false);
@@ -312,6 +314,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: text.trim(),
+          title: title.trim() || "Story",
           voiceName: selectedVoice,
           modeId: selectedModeId,
           customStyle,
@@ -328,6 +331,8 @@ export default function App() {
       const wavBlob = base64ToBlob(data.audioBase64, "audio/wav");
       setAudioBlob(wavBlob);
       setAudioBase64(data.audioBase64);
+      if (data.downloadUrlWav) setDownloadUrlWav(data.downloadUrlWav);
+      if (data.downloadUrlMp3) setDownloadUrlMp3(data.downloadUrlMp3);
 
       if (engineRef.current) {
         const decodedDuration = await engineRef.current.loadAudioBlob(wavBlob);
@@ -382,21 +387,40 @@ export default function App() {
   const handleDownloadWav = async () => {
     if (!audioBlob) return;
     const safeTitle = (title || "Story").toLowerCase().replace(/[^a-z0-9]/g, "_");
-    await downloadAudioFile(audioBlob, `${safeTitle}_master.wav`, audioBase64 || undefined);
+    await downloadAudioFile(
+      audioBlob,
+      `${safeTitle}_master.wav`,
+      audioBase64 || undefined,
+      downloadUrlWav || undefined
+    );
   };
 
   const handleDownloadMp3 = async (bitrate: 128 | 160) => {
     if (!audioBlob) return;
     setIsEncodingMp3(true);
     try {
-      const arrayBuf = await audioBlob.arrayBuffer();
-      const mp3Blob = await wavBufferToMp3Blob(arrayBuf, bitrate);
       const safeTitle = (title || "Story").toLowerCase().replace(/[^a-z0-9]/g, "_");
-      await downloadAudioFile(mp3Blob, `${safeTitle}_${bitrate}kbps.mp3`);
+      if (downloadUrlMp3) {
+        await downloadAudioFile(
+          audioBlob,
+          `${safeTitle}_${bitrate}kbps.mp3`,
+          audioBase64 || undefined,
+          downloadUrlMp3
+        );
+      } else {
+        const arrayBuf = await audioBlob.arrayBuffer();
+        const mp3Blob = await wavBufferToMp3Blob(arrayBuf, bitrate);
+        await downloadAudioFile(mp3Blob, `${safeTitle}_${bitrate}kbps.mp3`);
+      }
     } catch (err: any) {
       console.error("MP3 conversion failed, providing master WAV:", err);
       const safeTitle = (title || "Story").toLowerCase().replace(/[^a-z0-9]/g, "_");
-      await downloadAudioFile(audioBlob, `${safeTitle}_master.wav`, audioBase64 || undefined);
+      await downloadAudioFile(
+        audioBlob,
+        `${safeTitle}_master.wav`,
+        audioBase64 || undefined,
+        downloadUrlWav || undefined
+      );
     } finally {
       setIsEncodingMp3(false);
     }

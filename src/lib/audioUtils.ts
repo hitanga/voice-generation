@@ -109,8 +109,37 @@ export async function wavBufferToMp3Blob(
 export async function downloadAudioFile(
   blob: Blob,
   filename: string,
-  fallbackBase64?: string
+  fallbackBase64?: string,
+  serverDownloadUrl?: string
 ) {
+  // Strategy 1: If server direct download URL is available (has Content-Disposition attachment header)
+  if (serverDownloadUrl) {
+    try {
+      // Trigger via invisible iframe (highly effective in sandboxed iframes)
+      const hiddenIframe = document.createElement("iframe");
+      hiddenIframe.style.display = "none";
+      hiddenIframe.src = serverDownloadUrl;
+      document.body.appendChild(hiddenIframe);
+      setTimeout(() => {
+        hiddenIframe.remove();
+      }, 15000);
+
+      // Also trigger via anchor
+      const a = document.createElement("a");
+      a.style.display = "none";
+      a.href = serverDownloadUrl;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 2000);
+      return;
+    } catch (e) {
+      console.warn("Direct server URL download failed, trying form and blob fallbacks", e);
+    }
+  }
+
+  // Strategy 2: Try direct Blob ObjectURL download
   try {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -120,40 +149,48 @@ export async function downloadAudioFile(
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
-    
+
     setTimeout(() => {
-      document.body.removeChild(a);
+      a.remove();
       URL.revokeObjectURL(url);
     }, 5000);
   } catch (err) {
-    console.warn("Direct blob download failed, falling back to server download", err);
-    try {
-      const b64 = fallbackBase64 || (await blobToBase64(blob));
-      const res = await fetch("/api/tts/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audioBase64: b64,
-          filename,
-          format: filename.endsWith(".mp3") ? "mp3" : "wav",
-        }),
-      });
-      if (res.ok) {
-        const serverBlob = await res.blob();
-        const serverUrl = URL.createObjectURL(serverBlob);
-        const a = document.createElement("a");
-        a.href = serverUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          document.body.removeChild(a);
-          URL.revokeObjectURL(serverUrl);
-        }, 5000);
-      }
-    } catch (fallbackErr) {
-      console.error("Server download fallback also failed", fallbackErr);
+    console.warn("Direct blob download failed, falling back to server form POST", err);
+  }
+
+  // Strategy 3: Server form POST fallback (forces native file save dialog from server Content-Disposition)
+  try {
+    const b64 = fallbackBase64 || (await blobToBase64(blob));
+    if (b64) {
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = "/api/tts/download";
+      form.style.display = "none";
+
+      const inputData = document.createElement("input");
+      inputData.type = "hidden";
+      inputData.name = "audioBase64";
+      inputData.value = b64;
+      form.appendChild(inputData);
+
+      const inputName = document.createElement("input");
+      inputName.type = "hidden";
+      inputName.name = "filename";
+      inputName.value = filename;
+      form.appendChild(inputName);
+
+      const inputFormat = document.createElement("input");
+      inputFormat.type = "hidden";
+      inputFormat.name = "format";
+      inputFormat.value = filename.endsWith(".mp3") ? "mp3" : "wav";
+      form.appendChild(inputFormat);
+
+      document.body.appendChild(form);
+      form.submit();
+      setTimeout(() => form.remove(), 3000);
     }
+  } catch (formErr) {
+    console.error("Server form download fallback failed", formErr);
   }
 }
 

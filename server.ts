@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
+import lamejs from "@breezystack/lamejs";
 
 dotenv.config();
 
@@ -348,17 +349,71 @@ app.get("/api/tts/modes", (_req, res) => {
   res.json({ modes: VOICE_MODES });
 });
 
-// Helper: Call Gemini TTS with automatic fallback to Flash Lite TTS if quota is exceeded
-async function synthesizeChunkWithFallback(
+// Storage for temporary downloadable files (survives sandboxed iframe limitations)
+interface CachedDownload {
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+  createdAt: number;
+}
+const downloadCache = new Map<string, CachedDownload>();
+
+// Clean up download cache every 10 minutes (keep for 1 hour)
+setInterval(() => {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [id, item] of downloadCache.entries()) {
+    if (item.createdAt < cutoff) {
+      downloadCache.delete(id);
+    }
+  }
+}, 10 * 60 * 1000);
+
+// Helper: Convert WAV buffer to MP3 buffer using lamejs on the server
+function convertWavBufferToMp3Buffer(wavBuffer: Buffer, bitrateKbps: 128 | 160 = 160): Buffer {
+  try {
+    const { pcmData, sampleRate, channels } = extractPcmFromWav(wavBuffer);
+    const pcmInt16 = new Int16Array(
+      pcmData.buffer,
+      pcmData.byteOffset,
+      Math.floor(pcmData.byteLength / 2)
+    );
+
+    const mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, bitrateKbps);
+    const mp3Data: Buffer[] = [];
+    const sampleBlockSize = 1152;
+
+    for (let i = 0; i < pcmInt16.length; i += sampleBlockSize) {
+      const sampleChunk = pcmInt16.subarray(i, i + sampleBlockSize);
+      const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
+      if (mp3buf.length > 0) {
+        mp3Data.push(Buffer.from(mp3buf));
+      }
+    }
+
+    const mp3End = mp3encoder.flush();
+    if (mp3End.length > 0) {
+      mp3Data.push(Buffer.from(mp3End));
+    }
+
+    return Buffer.concat(mp3Data);
+  } catch (err) {
+    console.error("Server-side MP3 conversion error, fallback to WAV", err);
+    return wavBuffer;
+  }
+}
+
+// Helper: Call Gemini TTS with high-throughput Flash Lite TTS and automatic retry
+async function synthesizeChunkWithRetry(
   chunkText: string,
   styleInstruction: string,
-  actualVoiceName: string
+  actualVoiceName: string,
+  maxRetries = 2
 ): Promise<{ buffer: Buffer; modelUsed: string }> {
-  // Try gemini-3.8-flash-tts first; if quota is exhausted (429), fall back to gemini-3.8-flash-lite-tts
-  const models = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"];
+  // Always use gemini-3.8-flash-lite-tts: designated high-throughput model for narrative TTS
+  const model = "gemini-3.8-flash-lite-tts";
   let lastErr: any = null;
 
-  for (const model of models) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await ai.models.generateContent({
         model,
@@ -389,13 +444,25 @@ async function synthesizeChunkWithFallback(
       if (base64Audio) {
         return { buffer: Buffer.from(base64Audio, "base64"), modelUsed: model };
       }
+      throw new Error("No audio content returned in model response");
     } catch (err: any) {
-      console.warn(`Model ${model} TTS attempt error:`, err?.message || err);
       lastErr = err;
+      const isQuotaOrRateLimit =
+        err?.message?.includes("429") ||
+        err?.message?.includes("quota") ||
+        err?.message?.includes("RESOURCE_EXHAUSTED");
+
+      if (isQuotaOrRateLimit && attempt < maxRetries) {
+        const delay = 1500 * Math.pow(2, attempt);
+        console.warn(`Gemini TTS rate limit hit, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      break;
     }
   }
 
-  throw lastErr || new Error("Failed to generate speech with available TTS models.");
+  throw lastErr || new Error("Failed to generate speech with available TTS model.");
 }
 
 // Cache for generated voice samples to ensure instant zero-latency playback
@@ -435,7 +502,7 @@ app.get("/api/tts/sample/:voiceName", async (req, res) => {
       sampleStyle = `Authentic native Indian storyteller cadence. Speaks fluent Hindi (हिंदी) and Indian English with natural pronunciation, warm emotional inflection, clear diction, and traditional storytelling warmth. ${selectedMode.stylePrompt}`;
     }
 
-    const { buffer: sampleBuffer } = await synthesizeChunkWithFallback(
+    const { buffer: sampleBuffer } = await synthesizeChunkWithRetry(
       voice.sampleText || "Once upon a time...",
       sampleStyle,
       actualVoiceName
@@ -463,7 +530,7 @@ app.get("/api/tts/sample/:voiceName", async (req, res) => {
 // Single or multi-chunk TTS Generation
 app.post("/api/tts/generate", async (req, res) => {
   try {
-    const { text, voiceName = "Kore", modeId = "bedtime_warm", customStyle = "" } = req.body;
+    const { text, title = "Story", voiceName = "Kore", modeId = "bedtime_warm", customStyle = "" } = req.body;
 
     if (!text || typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "Story text is required" });
@@ -487,15 +554,19 @@ app.post("/api/tts/generate", async (req, res) => {
       styleInstruction = `Authentic native Indian storyteller cadence. Speaks fluent Hindi (हिंदी) and Indian English with natural pronunciation, warm emotional inflection, clear diction, and traditional storytelling warmth. ${styleInstruction}`;
     }
 
-    // Split story text into generous 1,200-word chunks (minimizing API calls and preventing quota exhaustion)
-    const chunks = splitStoryIntoChunks(text.trim(), 1200);
+    // Split story text into generous 1,000-word chunks (minimizing API calls and preventing rate limits)
+    const chunks = splitStoryIntoChunks(text.trim(), 1000);
     const audioWavBuffers: Buffer[] = [];
-    let usedModel = "gemini-3.8-flash-tts";
+    let usedModel = "gemini-3.8-flash-lite-tts";
 
-    // Synthesize each chunk using Gemini TTS with automatic Flash Lite fallback
+    // Synthesize each chunk using Gemini 3.8 Flash Lite TTS with automatic retry
     for (let i = 0; i < chunks.length; i++) {
       const chunkText = chunks[i];
-      const result = await synthesizeChunkWithFallback(chunkText, styleInstruction, actualVoiceName);
+      if (i > 0) {
+        // Respect API rate pacing between chunks (300ms pause)
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const result = await synthesizeChunkWithRetry(chunkText, styleInstruction, actualVoiceName);
       usedModel = result.modelUsed;
       audioWavBuffers.push(result.buffer);
     }
@@ -505,7 +576,7 @@ app.post("/api/tts/generate", async (req, res) => {
     if (audioWavBuffers.length === 1) {
       finalWavBuffer = audioWavBuffers[0];
     } else {
-      // Extract PCM data from all chunks and concatenate with a slight natural pause (e.g. 200ms silence = 9600 bytes at 24kHz 16-bit mono)
+      // Extract PCM data from all chunks and concatenate with a slight natural pause (200ms silence = 9600 bytes at 24kHz 16-bit mono)
       const silenceBytes = 9600;
       const silence = Buffer.alloc(silenceBytes);
       const combinedPcmParts: Buffer[] = [];
@@ -526,9 +597,23 @@ app.post("/api/tts/generate", async (req, res) => {
     const pcmBytes = Math.max(0, finalWavBuffer.length - 44);
     const estimatedDurationSeconds = pcmBytes / (24000 * 2);
 
+    // Save into server-side download cache for direct 1-click download even in sandboxed iframes
+    const audioId = "aud_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
+    const safeTitle = (title || "Story").toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+    downloadCache.set(audioId, {
+      buffer: finalWavBuffer,
+      mimeType: "audio/wav",
+      filename: safeTitle,
+      createdAt: Date.now(),
+    });
+
     res.json({
       success: true,
+      audioId,
       audioBase64: finalWavBuffer.toString("base64"),
+      downloadUrlWav: `/api/tts/download-file/${audioId}?format=wav&filename=${encodeURIComponent(safeTitle + "_master.wav")}`,
+      downloadUrlMp3: `/api/tts/download-file/${audioId}?format=mp3&filename=${encodeURIComponent(safeTitle + "_160kbps.mp3")}`,
       mimeType: "audio/wav",
       chunksCount: chunks.length,
       durationSeconds: estimatedDurationSeconds,
@@ -642,6 +727,48 @@ app.post("/api/tts/download", (req, res) => {
     res.send(buffer);
   } catch (err: any) {
     res.status(500).send("Download processing error");
+  }
+});
+
+// Direct GET download endpoint with Content-Disposition attachment header
+app.get("/api/tts/download-file/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    const format = (req.query.format as string) === "mp3" ? "mp3" : "wav";
+    const requestedName = (req.query.filename as string) || "story_audio";
+
+    const item = downloadCache.get(id);
+    if (!item) {
+      return res.status(404).send("Download link expired or not found. Please click Convert Story to Speech to generate a fresh master audio file.");
+    }
+
+    let outBuffer = item.buffer;
+    let outMime = "audio/wav";
+    let finalFilename = requestedName;
+
+    if (format === "mp3") {
+      outBuffer = convertWavBufferToMp3Buffer(item.buffer, 160);
+      outMime = "audio/mpeg";
+      if (!finalFilename.toLowerCase().endsWith(".mp3")) {
+        finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".mp3";
+      }
+    } else {
+      if (!finalFilename.toLowerCase().endsWith(".wav")) {
+        finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".wav";
+      }
+    }
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(finalFilename)}"; filename*=UTF-8''${encodeURIComponent(finalFilename)}`
+    );
+    res.setHeader("Content-Type", outMime);
+    res.setHeader("Content-Length", outBuffer.length);
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.send(outBuffer);
+  } catch (err: any) {
+    console.error("Direct file download error:", err);
+    res.status(500).send("Error serving audio download");
   }
 });
 

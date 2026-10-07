@@ -52,6 +52,9 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
         currentAudioRef.current.pause();
         currentAudioRef.current.currentTime = 0;
       }
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
       setPlayingVoice(null);
       return;
     }
@@ -61,6 +64,9 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
       currentAudioRef.current.pause();
       currentAudioRef.current.currentTime = 0;
       setPlayingVoice(null);
+    }
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
     }
 
     // Check if we already have this audio cached in memory
@@ -96,7 +102,38 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
       await audio.play();
       setPlayingVoice(voice.name);
     } catch (err) {
-      console.error("Failed to play voice sample", err);
+      console.warn("Server voice sample failed, falling back to browser voice preview", err);
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const samplePhrase = voice.sampleText || "Once upon a time, beneath the starlit sky, an ancient story began.";
+          const utter = new SpeechSynthesisUtterance(samplePhrase);
+          utter.rate = 0.95;
+          if (voice.gender === "male") utter.pitch = 0.88;
+          else utter.pitch = 1.1;
+
+          // Try to match appropriate voice if Indian/Hindi
+          const availVoices = window.speechSynthesis.getVoices();
+          if (voice.origin === "indian") {
+            const match = availVoices.find((v) => v.lang.includes("hi") || v.lang.includes("IN"));
+            if (match) utter.voice = match;
+          } else {
+            const match = availVoices.find((v) =>
+              voice.gender === "female"
+                ? v.name.toLowerCase().includes("female") || v.name.toLowerCase().includes("samantha") || v.name.toLowerCase().includes("zira")
+                : v.name.toLowerCase().includes("male") || v.name.toLowerCase().includes("david") || v.name.toLowerCase().includes("george")
+            );
+            if (match) utter.voice = match;
+          }
+
+          utter.onend = () => setPlayingVoice(null);
+          utter.onerror = () => setPlayingVoice(null);
+          setPlayingVoice(voice.name);
+          window.speechSynthesis.speak(utter);
+        } catch (_) {
+          setPlayingVoice(null);
+        }
+      }
     } finally {
       setLoadingVoice(null);
     }

@@ -39,13 +39,16 @@ export const StoryEditor: React.FC<StoryEditorProps> = ({
       if (msg.trim().startsWith("{")) {
         const parsed = JSON.parse(msg);
         if (parsed.error?.message) {
-          if (parsed.error.code === 429 || parsed.error.status === "RESOURCE_EXHAUSTED") {
-            return "Gemini Free Tier Quota Limit Reached: The daily limit for speech generation on the free tier has been reached. Please wait for the daily quota reset or attach an API key in AI Studio Secrets.";
+          if (parsed.error.code === 429 || parsed.error.status === "RESOURCE_EXHAUSTED" || parsed.error.message.includes("quota")) {
+            return "Gemini Free Tier Quota Limit Reached: The daily limit for speech generation on this free-tier project has been reached. We have switched to the high-throughput Gemini 3.8 Flash Lite TTS engine. You can retry now or attach a custom key in AI Studio Secrets.";
           }
           return parsed.error.message;
         }
       }
     } catch (_) {}
+    if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota")) {
+      return "Gemini Speech Quota Limit Reached: The daily speech quota for this free-tier project was exhausted. The system has automatically switched to Gemini 3.8 Flash Lite TTS with automatic retry. Please try clicking Convert Story to Speech again.";
+    }
     return msg;
   };
 
