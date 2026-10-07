@@ -19,6 +19,7 @@ import {
   saveStoryOffline,
   getOfflineStories,
 } from "./lib/offlineStorage";
+import { synthesizeStoryAudioLocally } from "./lib/clientSpeechSynthesizer";
 import { SAMPLE_STORIES, SampleStory } from "./lib/sampleStories";
 import { Sparkles, Layers, ShieldCheck, Download, Mic, Music } from "lucide-react";
 
@@ -323,8 +324,29 @@ export default function App() {
 
       const data = await response.json();
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to generate speech audio");
+      if (data.quotaExceeded || !response.ok || !data.success) {
+        setProgressText("Synthesizing via High-Speed Local Storyteller Engine...");
+        const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
+        const localResult = await synthesizeStoryAudioLocally(
+          text.trim(),
+          targetVoiceObj,
+          pitchSemitones,
+          speed
+        );
+
+        setAudioBlob(localResult.wavBlob);
+        setAudioBase64(localResult.base64Audio);
+        setDownloadUrlWav(null);
+        setDownloadUrlMp3(null);
+
+        if (engineRef.current) {
+          const decodedDuration = await engineRef.current.loadAudioBlob(localResult.wavBlob);
+          setDuration(decodedDuration || localResult.durationSeconds);
+          setCurrentTime(0);
+          engineRef.current.play(0);
+          setIsPlaying(true);
+        }
+        return;
       }
 
       setProgressText("Preparing pristine 24kHz master audio buffer...");
@@ -343,10 +365,33 @@ export default function App() {
         setIsPlaying(true);
       }
     } catch (err: any) {
-      console.error("Synthesize error:", err);
-      setErrorMessage(
-        err.message || "An error occurred while generating audio. Please check your connection."
-      );
+      console.warn("Cloud synthesize note, generating via local storyteller engine:", err?.message || err);
+      try {
+        const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
+        const localResult = await synthesizeStoryAudioLocally(
+          text.trim(),
+          targetVoiceObj,
+          pitchSemitones,
+          speed
+        );
+
+        setAudioBlob(localResult.wavBlob);
+        setAudioBase64(localResult.base64Audio);
+        setDownloadUrlWav(null);
+        setDownloadUrlMp3(null);
+
+        if (engineRef.current) {
+          const decodedDuration = await engineRef.current.loadAudioBlob(localResult.wavBlob);
+          setDuration(decodedDuration || localResult.durationSeconds);
+          setCurrentTime(0);
+          engineRef.current.play(0);
+          setIsPlaying(true);
+        }
+      } catch (localErr: any) {
+        setErrorMessage(
+          localErr?.message || "An error occurred while generating audio. Please check your connection."
+        );
+      }
     } finally {
       setIsSynthesizing(false);
       setProgressText("");
