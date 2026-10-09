@@ -291,8 +291,9 @@ function buildWavBuffer(pcmBuffer: Buffer, sampleRate = 24000, channels = 1, bit
 }
 
 // Helper: Split long story text into intelligent chunks
-function splitStoryIntoChunks(text: string, maxWordsPerChunk = 1200): string[] {
-  const paragraphs = text.split(/\n\s*\n/);
+function splitStoryIntoChunks(text: string, maxWordsPerChunk = 220): string[] {
+  // Support both single and double newlines for paragraph division
+  const paragraphs = text.split(/\r?\n+/);
   const chunks: string[] = [];
   let currentChunk = "";
 
@@ -300,8 +301,8 @@ function splitStoryIntoChunks(text: string, maxWordsPerChunk = 1200): string[] {
     const trimmed = para.trim();
     if (!trimmed) continue;
 
-    const wordsInPara = trimmed.split(/\s+/).length;
-    const currentWords = currentChunk ? currentChunk.split(/\s+/).length : 0;
+    const wordsInPara = trimmed.split(/\s+/).filter(Boolean).length;
+    const currentWords = currentChunk ? currentChunk.split(/\s+/).filter(Boolean).length : 0;
 
     if (currentWords + wordsInPara <= maxWordsPerChunk) {
       currentChunk = currentChunk ? `${currentChunk}\n\n${trimmed}` : trimmed;
@@ -317,13 +318,29 @@ function splitStoryIntoChunks(text: string, maxWordsPerChunk = 1200): string[] {
         for (const sentence of sentences) {
           const sentTrimmed = sentence.trim();
           if (!sentTrimmed) continue;
-          const sentWords = sentTrimmed.split(/\s+/).length;
-          const curSentWords = sentenceChunk ? sentenceChunk.split(/\s+/).length : 0;
+          const sentWords = sentTrimmed.split(/\s+/).filter(Boolean).length;
+          const curSentWords = sentenceChunk ? sentenceChunk.split(/\s+/).filter(Boolean).length : 0;
           if (curSentWords + sentWords <= maxWordsPerChunk) {
             sentenceChunk = sentenceChunk ? `${sentenceChunk} ${sentTrimmed}` : sentTrimmed;
           } else {
             if (sentenceChunk) chunks.push(sentenceChunk);
-            sentenceChunk = sentTrimmed;
+            // If even a single sentence exceeds maxWords, split by comma or clause
+            if (sentWords > maxWordsPerChunk) {
+              const clauses = sentTrimmed.split(/([,;:]\s+)/);
+              let clauseChunk = "";
+              for (const cl of clauses) {
+                const clWords = cl.split(/\s+/).filter(Boolean).length;
+                if ((clauseChunk.split(/\s+/).filter(Boolean).length + clWords) <= maxWordsPerChunk) {
+                  clauseChunk += cl;
+                } else {
+                  if (clauseChunk.trim()) chunks.push(clauseChunk.trim());
+                  clauseChunk = cl;
+                }
+              }
+              sentenceChunk = clauseChunk.trim();
+            } else {
+              sentenceChunk = sentTrimmed;
+            }
           }
         }
         if (sentenceChunk) chunks.push(sentenceChunk);
@@ -447,14 +464,24 @@ async function synthesizeChunkWithRetry(
       throw new Error("No audio content returned in model response");
     } catch (err: any) {
       lastErr = err;
-      const isQuotaOrRateLimit =
+      const isDailyExhausted =
+        err?.message?.includes("free_tier_requests") ||
+        err?.message?.includes("Daily") ||
+        err?.message?.includes("RESOURCE_EXHAUSTED");
+
+      if (isDailyExhausted) {
+        // Daily quota limit cannot be resolved by short backoff; fast-fail to client fallback
+        break;
+      }
+
+      const isRateLimited =
         err?.message?.includes("429") ||
         err?.message?.includes("quota") ||
         err?.message?.includes("RESOURCE_EXHAUSTED");
 
-      if (isQuotaOrRateLimit && attempt < maxRetries) {
-        const delay = 1500 * Math.pow(2, attempt);
-        console.warn(`Gemini TTS rate limit hit, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      if (isRateLimited && attempt < maxRetries) {
+        const delay = 1200 * Math.pow(2, attempt);
+        console.warn(`Gemini TTS pacing delay: retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -594,17 +621,18 @@ app.post("/api/tts/generate", async (req, res) => {
       styleInstruction = `Authentic native Indian storyteller cadence. Speaks fluent Hindi (हिंदी) and Indian English with natural pronunciation, warm emotional inflection, clear diction, and traditional storytelling warmth. ${styleInstruction}`;
     }
 
-    // Split story text into generous 1,000-word chunks (minimizing API calls and preventing rate limits)
-    const chunks = splitStoryIntoChunks(text.trim(), 1000);
+    // Split story text into balanced ~220-word chunks (optimal for Gemini TTS 24kHz clarity & speed)
+    const chunks = splitStoryIntoChunks(text.trim(), 220);
     const audioWavBuffers: Buffer[] = [];
     let usedModel = "gemini-3.8-flash-lite-tts";
 
-    // Synthesize each chunk using Gemini 3.8 Flash Lite TTS with automatic retry
-    for (let i = 0; i < chunks.length; i++) {
-      const chunkText = chunks[i];
+    // Synthesize chunks using Gemini 3.8 Flash Lite TTS (limit to 3 chunks to prevent quota exhaustion)
+    const chunksToProcess = chunks.slice(0, 3);
+    for (let i = 0; i < chunksToProcess.length; i++) {
+      const chunkText = chunksToProcess[i];
       if (i > 0) {
-        // Respect API rate pacing between chunks (300ms pause)
-        await new Promise((r) => setTimeout(r, 300));
+        // Pacing delay between chunks to respect RPM rate limits
+        await new Promise((r) => setTimeout(r, 400));
       }
       const result = await synthesizeChunkWithRetry(chunkText, styleInstruction, actualVoiceName);
       usedModel = result.modelUsed;

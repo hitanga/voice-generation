@@ -28,6 +28,7 @@ interface StoryPlayerProps {
   currentTime: number;
   duration: number;
   analyser: AnalyserNode | null;
+  engineType?: "gemini" | "browser";
   onPlay: () => void;
   onPause: () => void;
   onSeek: (seconds: number) => void;
@@ -51,6 +52,7 @@ export const StoryPlayer: React.FC<StoryPlayerProps> = ({
   currentTime,
   duration,
   analyser,
+  engineType = "gemini",
   onPlay,
   onPause,
   onSeek,
@@ -111,6 +113,15 @@ export const StoryPlayer: React.FC<StoryPlayerProps> = ({
             </span>
             <span className="text-[10px] font-heading font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-800 text-slate-300">
               Mood: {modeName}
+            </span>
+            <span
+              className={`text-[10px] font-heading font-semibold uppercase tracking-wider px-2 py-0.5 rounded border ${
+                engineType === "browser"
+                  ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+                  : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+              }`}
+            >
+              {engineType === "browser" ? "⚡ Live Speech Narrator" : "✨ Gemini 24kHz Studio"}
             </span>
           </div>
           <h2 className="text-lg font-bold text-slate-100 font-heading">

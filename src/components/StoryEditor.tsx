@@ -1,5 +1,5 @@
 import React, { useRef } from "react";
-import { BookOpen, Sparkles, Upload, FileText, Layers, Clock, AlertCircle } from "lucide-react";
+import { BookOpen, Sparkles, Upload, FileText, Layers, Clock, AlertCircle, Zap } from "lucide-react";
 import { SAMPLE_STORIES, SampleStory } from "../lib/sampleStories";
 
 interface StoryEditorProps {
@@ -9,6 +9,7 @@ interface StoryEditorProps {
   onChangeText: (text: string) => void;
   onSelectSample: (sample: SampleStory) => void;
   onSynthesize: () => void;
+  onSynthesizeInstant?: () => void;
   isSynthesizing: boolean;
   synthesizeProgressText?: string;
   errorMessage?: string | null;
@@ -21,6 +22,7 @@ export const StoryEditor: React.FC<StoryEditorProps> = ({
   onChangeText,
   onSelectSample,
   onSynthesize,
+  onSynthesizeInstant,
   isSynthesizing,
   synthesizeProgressText,
   errorMessage,
@@ -157,24 +159,34 @@ export const StoryEditor: React.FC<StoryEditorProps> = ({
         </div>
       </div>
 
-      {/* Error Message if any */}
+      {/* Error Message if any with Instant Narrator Action */}
       {errorMessage && (
         <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5">
           <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <div className="font-heading font-semibold text-rose-200">Speech Synthesis Alert</div>
+          <div className="space-y-2 flex-1">
+            <div className="font-heading font-semibold text-rose-200">Speech Engine Notice</div>
             <div className="leading-relaxed">{formatErrorMessage(errorMessage)}</div>
+            {onSynthesizeInstant && (
+              <button
+                type="button"
+                onClick={onSynthesizeInstant}
+                className="mt-1 px-3 py-1.5 rounded-lg bg-amber-500 text-slate-950 hover:bg-amber-400 font-heading font-semibold text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+              >
+                <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                <span>Read Story Aloud with Unlimited Speech Narrator</span>
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {/* Synthesize CTA Button */}
-      <div className="pt-2">
+      {/* Synthesize CTA Buttons */}
+      <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
         <button
           type="button"
           onClick={onSynthesize}
           disabled={isSynthesizing || !text.trim()}
-          className={`w-full py-3.5 px-6 rounded-xl font-heading font-semibold text-sm flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 ${
+          className={`flex-1 py-3.5 px-6 rounded-xl font-heading font-semibold text-sm flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 ${
             isSynthesizing
               ? "bg-amber-500/70 text-slate-950 cursor-wait animate-pulse"
               : !text.trim()
@@ -190,10 +202,23 @@ export const StoryEditor: React.FC<StoryEditorProps> = ({
           ) : (
             <>
               <Sparkles className="w-4 h-4 fill-slate-950" />
-              <span>Convert Story to Speech (Unlimited)</span>
+              <span>Convert Story to Speech</span>
             </>
           )}
         </button>
+
+        {onSynthesizeInstant && (
+          <button
+            type="button"
+            onClick={onSynthesizeInstant}
+            disabled={isSynthesizing || !text.trim()}
+            className="py-3.5 px-4 rounded-xl font-heading font-medium text-xs bg-slate-950 hover:bg-slate-800 text-amber-300 border border-amber-500/30 hover:border-amber-500/50 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+            title="Starts instant narration with real-time text tracking and zero quota limits"
+          >
+            <Zap className="w-3.5 h-3.5 text-amber-400" />
+            <span>Instant Narrator (Zero Quota)</span>
+          </button>
+        )}
       </div>
     </div>
   );

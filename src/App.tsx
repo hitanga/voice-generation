@@ -19,7 +19,7 @@ import {
   saveStoryOffline,
   getOfflineStories,
 } from "./lib/offlineStorage";
-import { synthesizeStoryAudioLocally } from "./lib/clientSpeechSynthesizer";
+import { synthesizeStoryAudioLocally, BrowserStoryNarrator } from "./lib/clientSpeechSynthesizer";
 import { SAMPLE_STORIES, SampleStory } from "./lib/sampleStories";
 import { Sparkles, Layers, ShieldCheck, Download, Mic, Music } from "lucide-react";
 
@@ -200,6 +200,7 @@ export default function App() {
   const [audioBase64, setAudioBase64] = useState<string | null>(null);
   const [downloadUrlWav, setDownloadUrlWav] = useState<string | null>(null);
   const [downloadUrlMp3, setDownloadUrlMp3] = useState<string | null>(null);
+  const [activeEngineMode, setActiveEngineMode] = useState<"gemini" | "browser">("gemini");
 
   // Synthesis State
   const [isSynthesizing, setIsSynthesizing] = useState<boolean>(false);
@@ -217,6 +218,7 @@ export default function App() {
   // Audio Engine Refs
   const engineRef = useRef<StoryAudioEngine | null>(null);
   const ambientRef = useRef<AmbientSoundGenerator | null>(null);
+  const narratorRef = useRef<BrowserStoryNarrator | null>(null);
 
   // Initialize Engines
   useEffect(() => {
@@ -234,6 +236,9 @@ export default function App() {
 
     const ambient = new AmbientSoundGenerator();
     ambientRef.current = ambient;
+
+    const narrator = new BrowserStoryNarrator();
+    narratorRef.current = narrator;
 
     // Fetch remote voices & modes if available
     fetch("/api/tts/voices")
@@ -258,6 +263,7 @@ export default function App() {
     return () => {
       engine.stop();
       ambient.stop();
+      narrator.stop();
     };
   }, []);
 
@@ -299,13 +305,64 @@ export default function App() {
     setAmbientVolume(0.25);
   };
 
-  // Convert Text to Speech (Unlimited)
-  const handleSynthesize = async () => {
+  // Start Unlimited Browser Narrator (Web Speech with sentence queueing & live word tracking)
+  const startBrowserNarration = async (notice?: string) => {
     if (!text.trim()) return;
+
+    if (engineRef.current) {
+      engineRef.current.stop();
+    }
+
+    setActiveEngineMode("browser");
+    setIsSynthesizing(false);
+    setProgressText("");
+
+    const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
+    const localResult = await synthesizeStoryAudioLocally(
+      text.trim(),
+      targetVoiceObj,
+      pitchSemitones,
+      speed
+    );
+
+    setAudioBlob(localResult.wavBlob);
+    setAudioBase64(localResult.base64Audio);
+    setDownloadUrlWav(null);
+    setDownloadUrlMp3(null);
+
+    if (notice) {
+      setErrorMessage(notice);
+    }
+
+    if (narratorRef.current) {
+      narratorRef.current.speak(text.trim(), targetVoiceObj, pitchSemitones, speed, {
+        onTimeUpdate: (cur, dur) => {
+          setCurrentTime(cur);
+          if (dur > 0) setDuration(dur);
+        },
+        onEnded: () => {
+          setIsPlaying(false);
+          setCurrentTime(0);
+        },
+      });
+      setIsPlaying(true);
+      setDuration(narratorRef.current.getDuration() || localResult.durationSeconds);
+      setCurrentTime(0);
+    }
+  };
+
+  // Convert Text to Speech (Dual Studio / Unlimited Engine)
+  const handleSynthesize = async (forceBrowserMode = false) => {
+    if (!text.trim()) return;
+
+    if (forceBrowserMode) {
+      await startBrowserNarration();
+      return;
+    }
 
     setIsSynthesizing(true);
     setErrorMessage(null);
-    setProgressText("Initializing Gemini 3.8 Flash TTS Engine...");
+    setProgressText("Synthesizing lifelike voice via Gemini 3.8 Flash TTS...");
     setIsSavedOffline(false);
     setIsSavedCloud(false);
 
@@ -325,27 +382,11 @@ export default function App() {
       const data = await response.json();
 
       if (data.quotaExceeded || !response.ok || !data.success) {
-        setProgressText("Synthesizing via High-Speed Local Storyteller Engine...");
-        const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
-        const localResult = await synthesizeStoryAudioLocally(
-          text.trim(),
-          targetVoiceObj,
-          pitchSemitones,
-          speed
-        );
-
-        setAudioBlob(localResult.wavBlob);
-        setAudioBase64(localResult.base64Audio);
-        setDownloadUrlWav(null);
-        setDownloadUrlMp3(null);
-
-        if (engineRef.current) {
-          const decodedDuration = await engineRef.current.loadAudioBlob(localResult.wavBlob);
-          setDuration(decodedDuration || localResult.durationSeconds);
-          setCurrentTime(0);
-          engineRef.current.play(0);
-          setIsPlaying(true);
-        }
+        const msg =
+          data.message ||
+          "Gemini Free Tier daily quota limit reached (10 requests/day). Continuing with Unlimited Speech Narrator!";
+        console.warn("Gemini Speech quota notice, switching seamlessly to Unlimited Story Narrator:", msg);
+        await startBrowserNarration(msg);
         return;
       }
 
@@ -356,6 +397,11 @@ export default function App() {
       if (data.downloadUrlWav) setDownloadUrlWav(data.downloadUrlWav);
       if (data.downloadUrlMp3) setDownloadUrlMp3(data.downloadUrlMp3);
 
+      setActiveEngineMode("gemini");
+      if (narratorRef.current) {
+        narratorRef.current.stop();
+      }
+
       if (engineRef.current) {
         const decodedDuration = await engineRef.current.loadAudioBlob(wavBlob);
         setDuration(decodedDuration);
@@ -365,33 +411,8 @@ export default function App() {
         setIsPlaying(true);
       }
     } catch (err: any) {
-      console.warn("Cloud synthesize note, generating via local storyteller engine:", err?.message || err);
-      try {
-        const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
-        const localResult = await synthesizeStoryAudioLocally(
-          text.trim(),
-          targetVoiceObj,
-          pitchSemitones,
-          speed
-        );
-
-        setAudioBlob(localResult.wavBlob);
-        setAudioBase64(localResult.base64Audio);
-        setDownloadUrlWav(null);
-        setDownloadUrlMp3(null);
-
-        if (engineRef.current) {
-          const decodedDuration = await engineRef.current.loadAudioBlob(localResult.wavBlob);
-          setDuration(decodedDuration || localResult.durationSeconds);
-          setCurrentTime(0);
-          engineRef.current.play(0);
-          setIsPlaying(true);
-        }
-      } catch (localErr: any) {
-        setErrorMessage(
-          localErr?.message || "An error occurred while generating audio. Please check your connection."
-        );
-      }
+      console.warn("Cloud synthesize connection note, starting Unlimited Story Narrator:", err?.message || err);
+      await startBrowserNarration("Continuing with Unlimited Speech Narrator.");
     } finally {
       setIsSynthesizing(false);
       setProgressText("");
@@ -400,32 +421,38 @@ export default function App() {
 
   // Player controls
   const handlePlay = () => {
-    if (engineRef.current && audioBlob) {
+    if (activeEngineMode === "browser") {
+      narratorRef.current?.resume();
+      setIsPlaying(true);
+    } else if (engineRef.current && audioBlob) {
       engineRef.current.play(currentTime);
       setIsPlaying(true);
     }
   };
 
   const handlePause = () => {
-    if (engineRef.current) {
+    if (activeEngineMode === "browser") {
+      narratorRef.current?.pause();
+      setIsPlaying(false);
+    } else if (engineRef.current) {
       engineRef.current.pause();
       setIsPlaying(false);
     }
   };
 
   const handleSeek = (seconds: number) => {
-    if (engineRef.current) {
+    if (activeEngineMode === "browser") {
+      narratorRef.current?.seek(seconds);
+      setCurrentTime(seconds);
+    } else if (engineRef.current) {
       engineRef.current.seek(seconds);
       setCurrentTime(seconds);
     }
   };
 
   const handleSkip = (offset: number) => {
-    if (engineRef.current) {
-      const target = Math.max(0, Math.min(duration, currentTime + offset));
-      engineRef.current.seek(target);
-      setCurrentTime(target);
-    }
+    const target = Math.max(0, Math.min(duration, currentTime + offset));
+    handleSeek(target);
   };
 
   // Downloads
@@ -622,7 +649,7 @@ export default function App() {
         </div>
 
         {/* Master Player Deck (Displays prominently when audio is generated) */}
-        {audioBlob && (
+        {(audioBlob || duration > 0) && (
           <div className="animate-in fade-in slide-in-from-top-4 duration-300">
             <StoryPlayer
               storyTitle={title}
@@ -632,7 +659,8 @@ export default function App() {
               isPlaying={isPlaying}
               currentTime={currentTime}
               duration={duration}
-              analyser={engineRef.current?.getAnalyser() || null}
+              analyser={activeEngineMode === "browser" ? narratorRef.current?.getAnalyser() || null : engineRef.current?.getAnalyser() || null}
+              engineType={activeEngineMode}
               onPlay={handlePlay}
               onPause={handlePause}
               onSeek={handleSeek}
@@ -656,7 +684,8 @@ export default function App() {
           text={text}
           onChangeText={setText}
           onSelectSample={handleSelectSample}
-          onSynthesize={handleSynthesize}
+          onSynthesize={() => handleSynthesize(false)}
+          onSynthesizeInstant={() => handleSynthesize(true)}
           isSynthesizing={isSynthesizing}
           synthesizeProgressText={progressText}
           errorMessage={errorMessage}

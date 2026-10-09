@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#1e1b4b" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde047" />
+      <stop offset="40%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background rounded squircle -->
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#bgGrad)" stroke="#f59e0b" stroke-opacity="0.4" stroke-width="2.5" />
+  
+  <!-- Subtle inner sound ring -->
+  <circle cx="64" cy="64" r="48" fill="none" stroke="#f59e0b" stroke-opacity="0.12" stroke-width="1.5" stroke-dasharray="3 4" />
+
+  <!-- Storyteller Sound Waves (Left & Right arcs) -->
+  <path d="M 86 44 A 28 28 0 0 1 86 84" fill="none" stroke="url(#goldGrad)" stroke-width="4.5" stroke-linecap="round" />
+  <path d="M 98 34 A 42 42 0 0 1 98 94" fill="none" stroke="url(#goldGrad)" stroke-width="4" stroke-linecap="round" opacity="0.85" />
+  <path d="M 110 24 A 56 56 0 0 1 110 104" fill="none" stroke="url(#goldGrad)" stroke-width="3" stroke-linecap="round" opacity="0.5" />
+
+  <!-- Open Storybook Base with glowing golden pages -->
+  <path d="M 32 86 C 42 82, 54 83, 64 88 C 74 83, 86 82, 96 86 C 96 89, 74 86, 64 91 C 54 86, 32 89, 32 86 Z" fill="url(#goldGrad)" opacity="0.6" />
+
+  <!-- Dynamic Voice Speaker & Microphone Core Emblem -->
+  <g filter="url(#glow)">
+    <!-- Speaker Body -->
+    <path d="M 34 50 L 46 50 L 62 36 L 62 92 L 46 78 L 34 78 Z" fill="url(#goldGrad)" stroke="#78350f" stroke-width="1" stroke-linejoin="round" />
+    <circle cx="72" cy="64" r="3.5" fill="#fffbeb" />
+  </g>
+
+  <!-- Little Storytelling Sparkle Star in upper corner -->
+  <path d="M 34 26 Q 34 33 41 33 Q 34 33 34 40 Q 34 33 27 33 Q 34 33 34 26 Z" fill="#fde047" opacity="0.9" />
+</svg>
