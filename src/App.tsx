@@ -19,7 +19,7 @@ import {
   saveStoryOffline,
   getOfflineStories,
 } from "./lib/offlineStorage";
-import { synthesizeStoryAudioLocally, BrowserStoryNarrator } from "./lib/clientSpeechSynthesizer";
+import { BrowserStoryNarrator } from "./lib/clientSpeechSynthesizer";
 import { SAMPLE_STORIES, SampleStory } from "./lib/sampleStories";
 import { Sparkles, Layers, ShieldCheck, Download, Mic, Music } from "lucide-react";
 
@@ -318,30 +318,17 @@ export default function App() {
 
     setIsPlaying(false);
     setIsSynthesizing(true);
-    setProgressText("Generating speech audio segments...");
+    setProgressText("Preparing speech narrator...");
 
     try {
       setActiveEngineMode("browser");
       const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
 
-      // Prepare local audio container and sentence queue silently without reading aloud
-      const localResult = await synthesizeStoryAudioLocally(
-        text.trim(),
-        targetVoiceObj,
-        pitchSemitones,
-        speed
-      );
-
-      setAudioBlob(localResult.wavBlob);
-      setAudioBase64(localResult.base64Audio);
-      setDownloadUrlWav(null);
-      setDownloadUrlMp3(null);
-
       if (notice) {
         setErrorMessage(notice);
       }
 
-      let plannedDuration = localResult.durationSeconds;
+      let plannedDuration = 0;
 
       if (narratorRef.current) {
         plannedDuration = narratorRef.current.prepareStory(
@@ -362,18 +349,16 @@ export default function App() {
         );
       }
 
-      setDuration(plannedDuration || localResult.durationSeconds);
+      setDuration(plannedDuration);
       setCurrentTime(0);
 
-      setProgressText("Speech generation complete!");
-      // Brief pause so the user sees generation completed cleanly
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      setProgressText("Ready for playback!");
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // Mark generation as completely finished FIRST
       setIsSynthesizing(false);
       setProgressText("");
 
-      // Voice only comes AFTER text to speech generation is fully completed
+      // Voice only comes after preparation completes
       if (narratorRef.current) {
         narratorRef.current.play(0);
         setIsPlaying(true);
@@ -382,7 +367,7 @@ export default function App() {
       console.error("Narration generation error:", err);
       setIsSynthesizing(false);
       setProgressText("");
-      setErrorMessage("Could not complete speech generation. Please try again.");
+      setErrorMessage("Could not start narration. Please click Convert Story to Speech.");
     }
   };
 
@@ -424,18 +409,21 @@ export default function App() {
 
       const data = await response.json();
 
-      if (data.quotaExceeded || !response.ok || !data.success) {
-        const msg =
-          data.message ||
-          "Gemini Free Tier daily quota limit reached (10 requests/day). Continuing with Unlimited Speech Narrator!";
-        console.warn("Gemini Speech quota notice, switching seamlessly to Unlimited Story Narrator:", msg);
-        // Seamlessly switch to narrator while keeping generation silent until complete
-        await startBrowserNarration(msg);
+      if (!response.ok || !data.success || !data.audioBase64) {
+        const msg = data.message || data.error || "Speech generation could not be completed. Please try again.";
+        setErrorMessage(msg);
+        setIsSynthesizing(false);
+        setProgressText("");
         return;
       }
 
-      setProgressText("Preparing pristine 24kHz master audio buffer...");
+      setProgressText("Preparing pristine master audio player...");
       const wavBlob = base64ToBlob(data.audioBase64, "audio/wav");
+      
+      if (!wavBlob || wavBlob.size <= 44) {
+        throw new Error("Received empty audio stream from model. Please retry.");
+      }
+
       setAudioBlob(wavBlob);
       setAudioBase64(data.audioBase64);
       if (data.downloadUrlWav) setDownloadUrlWav(data.downloadUrlWav);
@@ -448,7 +436,7 @@ export default function App() {
 
       if (engineRef.current) {
         const decodedDuration = await engineRef.current.loadAudioBlob(wavBlob);
-        setDuration(decodedDuration);
+        setDuration(decodedDuration || data.durationSeconds || 1);
         setCurrentTime(0);
       }
 
@@ -465,8 +453,8 @@ export default function App() {
         setIsPlaying(true);
       }
     } catch (err: any) {
-      console.warn("Cloud synthesize connection note, switching to Unlimited Story Narrator:", err?.message || err);
-      await startBrowserNarration("Continuing with Unlimited Speech Narrator.");
+      console.error("Speech synthesis connection note:", err);
+      setErrorMessage(err?.message || "Failed to generate speech. Please check your connection and try again.");
     } finally {
       setIsSynthesizing(false);
       setProgressText("");

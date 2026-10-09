@@ -1,16 +1,22 @@
 import lamejs from "@breezystack/lamejs";
 
 /**
- * Convert base64 data to Blob
+ * Convert base64 data to Blob safely for arbitrarily large audio buffers
  */
-export function base64ToBlob(base64: string, mimeType: string): Blob {
-  const byteCharacters = atob(base64);
-  const byteNumbers = new Array(byteCharacters.length);
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
+export function base64ToBlob(base64: string, mimeType = "audio/wav"): Blob {
+  try {
+    const cleanBase64 = base64.replace(/^data:[^;]+;base64,/, "").replace(/\s/g, "");
+    const binaryString = atob(cleanBase64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mimeType });
+  } catch (err) {
+    console.error("base64ToBlob error:", err);
+    return new Blob([], { type: mimeType });
   }
-  const byteArray = new Uint8Array(byteNumbers);
-  return new Blob([byteArray], { type: mimeType });
 }
 
 /**

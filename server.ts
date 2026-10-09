@@ -419,77 +419,78 @@ function convertWavBufferToMp3Buffer(wavBuffer: Buffer, bitrateKbps: 128 | 160 =
   }
 }
 
-// Helper: Call Gemini TTS with high-throughput Flash Lite TTS and automatic retry
+// Helper: Call Gemini TTS with multi-model cascade (fastest first, fallback models on rate limits)
 async function synthesizeChunkWithRetry(
   chunkText: string,
   styleInstruction: string,
   actualVoiceName: string,
   maxRetries = 2
 ): Promise<{ buffer: Buffer; modelUsed: string }> {
-  // Always use gemini-3.8-flash-lite-tts: designated high-throughput model for narrative TTS
-  const model = "gemini-3.8-flash-lite-tts";
+  // Cascading candidate TTS models for 3x quota and rate-limit resilience
+  const candidateModels = [
+    "gemini-3.8-flash-tts",
+    "gemini-3.8-flash-lite-tts",
+    "gemini-2.5-flash-preview-tts",
+  ];
+
   let lastErr: any = null;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: chunkText,
-                speechMetadata: {
-                  style: styleInstruction,
+  for (const model of candidateModels) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: chunkText,
+                  speechMetadata: {
+                    style: styleInstruction,
+                  },
                 },
+              ],
+            },
+          ],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: actualVoiceName },
               },
-            ],
-          },
-        ],
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: actualVoiceName },
             },
           },
-        },
-      });
+        });
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-        return { buffer: Buffer.from(base64Audio, "base64"), modelUsed: model };
+        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (base64Audio) {
+          const buf = Buffer.from(base64Audio, "base64");
+          if (buf.length > 44) {
+            return { buffer: buf, modelUsed: model };
+          }
+        }
+        throw new Error("No audio content returned in model response");
+      } catch (err: any) {
+        lastErr = err;
+        const isQuotaOrLimit =
+          err?.message?.includes("429") ||
+          err?.message?.includes("quota") ||
+          err?.message?.includes("RESOURCE_EXHAUSTED");
+
+        if (isQuotaOrLimit) {
+          console.warn(`TTS model ${model} rate-limited or quota reached. Cascading to next TTS model...`);
+          break; // Break retry loop on this model; cascade immediately to next model
+        }
+
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 600));
+        }
       }
-      throw new Error("No audio content returned in model response");
-    } catch (err: any) {
-      lastErr = err;
-      const isDailyExhausted =
-        err?.message?.includes("free_tier_requests") ||
-        err?.message?.includes("Daily") ||
-        err?.message?.includes("RESOURCE_EXHAUSTED");
-
-      if (isDailyExhausted) {
-        // Daily quota limit cannot be resolved by short backoff; fast-fail to client fallback
-        break;
-      }
-
-      const isRateLimited =
-        err?.message?.includes("429") ||
-        err?.message?.includes("quota") ||
-        err?.message?.includes("RESOURCE_EXHAUSTED");
-
-      if (isRateLimited && attempt < maxRetries) {
-        const delay = 1200 * Math.pow(2, attempt);
-        console.warn(`Gemini TTS pacing delay: retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
-      }
-      break;
     }
   }
 
-  throw lastErr || new Error("Failed to generate speech with available TTS model.");
+  throw lastErr || new Error("Failed to generate speech with available TTS models.");
 }
 
 // Helper: Synthesize rich harmonic vocal preview for any storyteller voice (instant 0ms response, 0 API quota used)
@@ -702,7 +703,7 @@ app.post("/api/tts/generate", async (req, res) => {
         success: false,
         quotaExceeded: true,
         error: "QUOTA_EXCEEDED",
-        message: "Gemini Free Tier daily quota limit reached (10 requests/day). The High-Speed Local Speech Engine is now synthesizing your story with full playback and download support!",
+        message: "Gemini Speech rate limit reached. Please wait a brief moment and try again with your story.",
       });
     }
 

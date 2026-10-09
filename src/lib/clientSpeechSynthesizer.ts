@@ -1,87 +1,10 @@
 /**
- * Client-Side Story Speech Synthesizer & Narrator
- * Provides unlimited offline text-to-speech conversion and real-time human narration
- * using Web Speech API with sentence queueing, word tracking, pitch/speed modulation,
- * and live audio waveform analysis for the player visualizer.
+ * Client-Side Story Narrator
+ * Provides live speech narration using Web Speech API with sentence queueing,
+ * word tracking, pitch/speed modulation, and audio waveform analysis for the visualizer.
  */
 
 import { VoiceOption } from "../components/VoiceSelector";
-
-export interface ClientSynthesisResult {
-  wavBlob: Blob;
-  base64Audio: string;
-  durationSeconds: number;
-}
-
-/**
- * Builds a valid standard 44-byte RIFF WAV header for 16-bit PCM
- */
-function createWavHeader(dataLength: number, sampleRate = 24000, channels = 1): ArrayBuffer {
-  const buffer = new ArrayBuffer(44);
-  const view = new DataView(buffer);
-
-  const writeString = (offset: number, string: string) => {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  };
-
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + dataLength, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true); // Subchunk1Size
-  view.setUint16(20, 1, true); // PCM format
-  view.setUint16(22, channels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * channels * 2, true); // ByteRate
-  view.setUint16(32, channels * 2, true); // BlockAlign
-  view.setUint16(34, 16, true); // BitsPerSample
-  writeString(36, "data");
-  view.setUint32(40, dataLength, true);
-
-  return buffer;
-}
-
-/**
- * Creates a clean valid WAV audio container for offline caching and metadata storage
- */
-export async function synthesizeStoryAudioLocally(
-  text: string,
-  _voice: VoiceOption,
-  _pitchSemitones = 0,
-  speed = 1.0
-): Promise<ClientSynthesisResult> {
-  const sampleRate = 24000;
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const wordCount = words.length;
-
-  // Calculate speaking time at natural reading speed (~140 wpm adjusted for speed)
-  const wordsPerSecond = (140 / 60) * (speed || 1.0);
-  const durationSeconds = Math.max(2.0, Math.min(3600, wordCount / wordsPerSecond));
-
-  // Generate lightweight silent/gentle ambient carrier buffer for container validity
-  const totalSamples = Math.min(sampleRate * 5, Math.floor(sampleRate * durationSeconds));
-  const pcmData = new Int16Array(totalSamples);
-
-  const wavHeader = createWavHeader(pcmData.byteLength, sampleRate, 1);
-  const wavBlob = new Blob([wavHeader, pcmData], { type: "audio/wav" });
-
-  const arrayBuffer = await wavBlob.arrayBuffer();
-  let binary = "";
-  const bytes = new Uint8Array(arrayBuffer);
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
-  }
-  const base64Audio = btoa(binary);
-
-  return {
-    wavBlob,
-    base64Audio,
-    durationSeconds,
-  };
-}
 
 /**
  * Advanced Browser Story Narrator
@@ -278,7 +201,9 @@ export class BrowserStoryNarrator {
 
     if (this.sentences.length === 0) return;
 
-    window.speechSynthesis.cancel();
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+      window.speechSynthesis.cancel();
+    }
     this.isSpeaking = true;
     this.isPaused = false;
 
@@ -288,7 +213,12 @@ export class BrowserStoryNarrator {
       this.currentSentenceIndex = 0;
       this.elapsedSeconds = 0;
       this.startTicker();
-      this.speakCurrentSentence();
+      // Slight delay avoids Chrome bug where cancel() drops the immediate speak()
+      setTimeout(() => {
+        if (this.isSpeaking && !this.isPaused) {
+          this.speakCurrentSentence();
+        }
+      }, 50);
     }
   }
 
