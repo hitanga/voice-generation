@@ -291,7 +291,7 @@ function buildWavBuffer(pcmBuffer: Buffer, sampleRate = 24000, channels = 1, bit
 }
 
 // Helper: Split long story text into intelligent chunks
-function splitStoryIntoChunks(text: string, maxWordsPerChunk = 220): string[] {
+function splitStoryIntoChunks(text: string, maxWordsPerChunk = 350): string[] {
   // Support both single and double newlines for paragraph division
   const paragraphs = text.split(/\r?\n+/);
   const chunks: string[] = [];
@@ -621,18 +621,18 @@ app.post("/api/tts/generate", async (req, res) => {
       styleInstruction = `Authentic native Indian storyteller cadence. Speaks fluent Hindi (हिंदी) and Indian English with natural pronunciation, warm emotional inflection, clear diction, and traditional storytelling warmth. ${styleInstruction}`;
     }
 
-    // Split story text into balanced ~220-word chunks (optimal for Gemini TTS 24kHz clarity & speed)
-    const chunks = splitStoryIntoChunks(text.trim(), 220);
+    // Split story text into balanced ~350-word chunks (optimal for Gemini TTS 24kHz clarity & speed)
+    const chunks = splitStoryIntoChunks(text.trim(), 350);
     const audioWavBuffers: Buffer[] = [];
     let usedModel = "gemini-3.8-flash-lite-tts";
 
-    // Synthesize chunks using Gemini 3.8 Flash Lite TTS (limit to 3 chunks to prevent quota exhaustion)
-    const chunksToProcess = chunks.slice(0, 3);
+    // Synthesize chunks using Gemini 3.8 Flash Lite TTS (support up to 6 chunks for long stories)
+    const chunksToProcess = chunks.slice(0, 6);
     for (let i = 0; i < chunksToProcess.length; i++) {
       const chunkText = chunksToProcess[i];
       if (i > 0) {
         // Pacing delay between chunks to respect RPM rate limits
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, 1000));
       }
       const result = await synthesizeChunkWithRetry(chunkText, styleInstruction, actualVoiceName);
       usedModel = result.modelUsed;

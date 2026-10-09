@@ -229,9 +229,10 @@ export class BrowserStoryNarrator {
   }
 
   /**
-   * Start narrating story text
+   * Prepares and loads the story without starting voice playback.
+   * Ensures text-to-speech generation completes fully before the voice speaks.
    */
-  public speak(
+  public prepareStory(
     text: string,
     voice: VoiceOption,
     pitchSemitones = 0,
@@ -241,12 +242,7 @@ export class BrowserStoryNarrator {
       onSentenceChange?: (index: number, sentence: string) => void;
       onEnded?: () => void;
     }
-  ) {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      console.warn("SpeechSynthesis not supported on this device/browser");
-      return;
-    }
-
+  ): number {
     this.stop();
 
     this.voice = voice;
@@ -268,14 +264,50 @@ export class BrowserStoryNarrator {
     });
     this.totalDuration = this.sentenceDurations.reduce((sum, d) => sum + d, 0);
 
+    return this.totalDuration;
+  }
+
+  /**
+   * Plays the prepared story from specified second
+   */
+  public play(startOffsetSeconds = 0) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      console.warn("SpeechSynthesis not supported on this device/browser");
+      return;
+    }
+
+    if (this.sentences.length === 0) return;
+
+    window.speechSynthesis.cancel();
     this.isSpeaking = true;
     this.isPaused = false;
 
-    // Start timer tick for fluid time updates
-    this.startTicker();
+    if (startOffsetSeconds > 0) {
+      this.seek(startOffsetSeconds);
+    } else {
+      this.currentSentenceIndex = 0;
+      this.elapsedSeconds = 0;
+      this.startTicker();
+      this.speakCurrentSentence();
+    }
+  }
 
-    // Start speaking first sentence
-    this.speakCurrentSentence();
+  /**
+   * Prepare and start narrating story text
+   */
+  public speak(
+    text: string,
+    voice: VoiceOption,
+    pitchSemitones = 0,
+    speed = 1.0,
+    callbacks?: {
+      onTimeUpdate?: (currentTime: number, duration: number, sentenceIndex: number) => void;
+      onSentenceChange?: (index: number, sentence: string) => void;
+      onEnded?: () => void;
+    }
+  ) {
+    this.prepareStory(text, voice, pitchSemitones, speed, callbacks);
+    this.play(0);
   }
 
   private startTicker() {

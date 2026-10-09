@@ -309,51 +309,94 @@ export default function App() {
   const startBrowserNarration = async (notice?: string) => {
     if (!text.trim()) return;
 
-    if (engineRef.current) {
-      engineRef.current.stop();
+    // Immediately stop and silence any current playback
+    if (engineRef.current) engineRef.current.stop();
+    if (narratorRef.current) narratorRef.current.stop();
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
     }
 
-    setActiveEngineMode("browser");
-    setIsSynthesizing(false);
-    setProgressText("");
+    setIsPlaying(false);
+    setIsSynthesizing(true);
+    setProgressText("Generating speech audio segments...");
 
-    const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
-    const localResult = await synthesizeStoryAudioLocally(
-      text.trim(),
-      targetVoiceObj,
-      pitchSemitones,
-      speed
-    );
+    try {
+      setActiveEngineMode("browser");
+      const targetVoiceObj = voices.find((v) => v.name === selectedVoice) || voices[0];
 
-    setAudioBlob(localResult.wavBlob);
-    setAudioBase64(localResult.base64Audio);
-    setDownloadUrlWav(null);
-    setDownloadUrlMp3(null);
+      // Prepare local audio container and sentence queue silently without reading aloud
+      const localResult = await synthesizeStoryAudioLocally(
+        text.trim(),
+        targetVoiceObj,
+        pitchSemitones,
+        speed
+      );
 
-    if (notice) {
-      setErrorMessage(notice);
-    }
+      setAudioBlob(localResult.wavBlob);
+      setAudioBase64(localResult.base64Audio);
+      setDownloadUrlWav(null);
+      setDownloadUrlMp3(null);
 
-    if (narratorRef.current) {
-      narratorRef.current.speak(text.trim(), targetVoiceObj, pitchSemitones, speed, {
-        onTimeUpdate: (cur, dur) => {
-          setCurrentTime(cur);
-          if (dur > 0) setDuration(dur);
-        },
-        onEnded: () => {
-          setIsPlaying(false);
-          setCurrentTime(0);
-        },
-      });
-      setIsPlaying(true);
-      setDuration(narratorRef.current.getDuration() || localResult.durationSeconds);
+      if (notice) {
+        setErrorMessage(notice);
+      }
+
+      let plannedDuration = localResult.durationSeconds;
+
+      if (narratorRef.current) {
+        plannedDuration = narratorRef.current.prepareStory(
+          text.trim(),
+          targetVoiceObj,
+          pitchSemitones,
+          speed,
+          {
+            onTimeUpdate: (cur, dur) => {
+              setCurrentTime(cur);
+              if (dur > 0) setDuration(dur);
+            },
+            onEnded: () => {
+              setIsPlaying(false);
+              setCurrentTime(0);
+            },
+          }
+        );
+      }
+
+      setDuration(plannedDuration || localResult.durationSeconds);
       setCurrentTime(0);
+
+      setProgressText("Speech generation complete!");
+      // Brief pause so the user sees generation completed cleanly
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      // Mark generation as completely finished FIRST
+      setIsSynthesizing(false);
+      setProgressText("");
+
+      // Voice only comes AFTER text to speech generation is fully completed
+      if (narratorRef.current) {
+        narratorRef.current.play(0);
+        setIsPlaying(true);
+      }
+    } catch (err: any) {
+      console.error("Narration generation error:", err);
+      setIsSynthesizing(false);
+      setProgressText("");
+      setErrorMessage("Could not complete speech generation. Please try again.");
     }
   };
 
   // Convert Text to Speech (Dual Studio / Unlimited Engine)
   const handleSynthesize = async (forceBrowserMode = false) => {
     if (!text.trim()) return;
+
+    // Stop and silence any audio currently playing
+    if (engineRef.current) engineRef.current.stop();
+    if (narratorRef.current) narratorRef.current.stop();
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsPlaying(false);
 
     if (forceBrowserMode) {
       await startBrowserNarration();
@@ -386,6 +429,7 @@ export default function App() {
           data.message ||
           "Gemini Free Tier daily quota limit reached (10 requests/day). Continuing with Unlimited Speech Narrator!";
         console.warn("Gemini Speech quota notice, switching seamlessly to Unlimited Story Narrator:", msg);
+        // Seamlessly switch to narrator while keeping generation silent until complete
         await startBrowserNarration(msg);
         return;
       }
@@ -406,12 +450,22 @@ export default function App() {
         const decodedDuration = await engineRef.current.loadAudioBlob(wavBlob);
         setDuration(decodedDuration);
         setCurrentTime(0);
-        // Start playback smoothly
+      }
+
+      setProgressText("Speech generation complete!");
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      // Mark generation as completely finished FIRST
+      setIsSynthesizing(false);
+      setProgressText("");
+
+      // Start playback ONLY AFTER text-to-speech generation has completed
+      if (engineRef.current) {
         engineRef.current.play(0);
         setIsPlaying(true);
       }
     } catch (err: any) {
-      console.warn("Cloud synthesize connection note, starting Unlimited Story Narrator:", err?.message || err);
+      console.warn("Cloud synthesize connection note, switching to Unlimited Story Narrator:", err?.message || err);
       await startBrowserNarration("Continuing with Unlimited Speech Narrator.");
     } finally {
       setIsSynthesizing(false);
@@ -422,8 +476,15 @@ export default function App() {
   // Player controls
   const handlePlay = () => {
     if (activeEngineMode === "browser") {
-      narratorRef.current?.resume();
-      setIsPlaying(true);
+      if (narratorRef.current) {
+        if (narratorRef.current.getIsPlaying()) return;
+        if (currentTime > 0) {
+          narratorRef.current.resume();
+        } else {
+          narratorRef.current.play(0);
+        }
+        setIsPlaying(true);
+      }
     } else if (engineRef.current && audioBlob) {
       engineRef.current.play(currentTime);
       setIsPlaying(true);
